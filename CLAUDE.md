@@ -97,13 +97,17 @@ tables you've marked private), etc.
 
 ## About Universal File Converter
 
-Convert files between PDF, Word, Excel, PowerPoint and images.
+Convert files between PDF, Word, Excel, PowerPoint and images, and read
+scans and photos (JPG, PNG, TIFF, scanned PDF pages) into editable Word or
+Excel with OCR.
 
 One screen: pick a file (drag and drop or a picker), preview it, choose a
 target format, convert, preview the result and download it. All conversions
 run in the browser (`public/convert.js`), so files never leave the device;
 the server only serves the page and the libraries' browser builds under
-`/vendor/` (see `server.js`). Platform file storage is not used: it accepts
+`/vendor/` (see `server.js`). OCR is Tesseract.js running on the device, with
+each language's reading data served from `/vendor/tessdata/<code>`; the
+platform LLM proxy is deliberately not used, so scans never leave the device. Platform file storage is not used: it accepts
 images only, and nothing needs keeping.
 
 ## Design
@@ -144,6 +148,12 @@ Re-theme by changing the token values there, keeping every text pair at
 - No database tables: the app keeps nothing.
 - A new conversion goes in `public/convert.js` (`TARGETS` and `convert()`),
   and its result needs a previewer in `public/app.js`.
+- Text read with OCR (`ocrLines`) comes out in the same lines-of-runs shape,
+  in points, as `pdfPageLines`, so Word (`linesToParagraphs`) and Excel
+  (`fillSheet`) are built the same way whichever way the text was found.
+- A new OCR language needs an `OCR_LANGUAGES` entry, its
+  `@tesseract.js-data/<code>` package and a `tessdata/<code>` line in
+  `VENDOR` in `server.js`.
 - PDF page and slide thumbnails are drawn as the document looks (white
   pages) in both looks; the Word and spreadsheet previews use the theme
   tokens.

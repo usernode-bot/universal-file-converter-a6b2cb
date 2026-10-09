@@ -1,16 +1,16 @@
 // The converter screen: choose a file, see it, pick a format, convert,
 // see the result and download it. The conversions are in convert.js.
 import {
-  FORMATS, TARGETS, MAX_PAGES, ConvertError, Cancelled,
+  FORMATS, TARGETS, MAX_PAGES, IMAGE_KINDS, OCR_LANGUAGES, ConvertError, Cancelled,
   detectKind, formatBytes, baseName, convert, lib,
-  openPdf, closePdf, renderPdfPage, imageToCanvas, docxToHtml,
+  openPdf, closePdf, renderPdfPage, imageToCanvas, openImage, docxToHtml,
   readWorkbook, sheetGrid, readPresentation, drawSlide,
 } from '/convert.js';
 
 const $ = (id) => document.getElementById(id);
 
 const TARGET_NOTES = {
-  docx: 'The text of each page becomes editable paragraphs. Pages with no text, like scans, come across as pictures.',
+  docx: 'The text of each page becomes editable paragraphs.',
   xlsx: 'Each page becomes a sheet, with text lined up into rows and columns.',
   pptx: 'Each page becomes a slide. The page text goes in the speaker notes.',
   jpg: 'Each page becomes a JPG image. Several pages come as one ZIP file.',
@@ -21,9 +21,21 @@ const SOURCE_NOTES = {
   docx: 'Text, headings, lists, tables and pictures are kept. Page layout follows A4.',
   xlsx: 'Each sheet becomes a table, on as many pages as it needs.',
   pptx: 'Each slide becomes a page. Text, pictures and simple shapes are kept; charts and effects are not.',
-  jpg: 'The image becomes a single-page PDF.',
-  png: 'The image becomes a single-page PDF.',
 };
+// For JPG, PNG and TIFF, by target.
+const IMAGE_TARGET_NOTES = {
+  pdf: 'The image becomes a single-page PDF.',
+  docx: 'The text is read from the image (OCR) and becomes editable paragraphs.',
+  xlsx: 'The text is read from the image (OCR). Tables are split into rows and columns.',
+};
+// What a PDF's Word or Excel note adds: how scanned pages are handled, or,
+// when this PDF looks scanned, that its text will be read with OCR.
+const PDF_OCR_NOTES = {
+  docx: 'Pages with no text, like scans, are read with OCR.',
+  xlsx: 'Scanned pages are read with OCR.',
+};
+const SCANNED_NOTE = 'This PDF looks scanned, so its text will be read with OCR.';
+const LANGUAGE_KEY = 'ocr-language';
 
 const state = {
   file: null,
@@ -33,6 +45,10 @@ const state = {
   signal: null,
   urls: [],
   readable: true,
+  // For a PDF: whether its first pages have no text of their own
+  // ('all', 'some' or 'none'). For a TIFF: how many pages it has.
+  scanned: 'none',
+  pages: 1,
 };
 
 // ── Object URLs, released when the screen resets ───────────────────────────
@@ -99,8 +115,17 @@ async function previewPdf(el, blob) {
     grid.appendChild(figure(thumb(canvas), `Page ${i}`));
     page.cleanup();
   }
+  // Whether it looks scanned: the first few pages with no text of their own.
+  const sampled = Math.min(total, 5);
+  let textless = 0;
+  for (let i = 1; i <= sampled; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    if (!content.items.some((it) => it.str && it.str.trim())) textless++;
+    page.cleanup();
+  }
   await closePdf(pdf);
-  return { pages: total };
+  return { pages: total, scanned: textless === sampled ? 'all' : textless ? 'some' : 'none' };
 }
 
 async function previewImages(el, images) {
@@ -217,8 +242,33 @@ async function previewPptx(el, blob) {
   return { slides: total };
 }
 
+// A TIFF: browsers can't show one in an <img>, so its pages are drawn.
+async function previewTiff(el, blob) {
+  const img = await openImage(blob, 'tiff');
+  if (img.count === 1) {
+    const canvas = await img.page(0);
+    const dims = `${canvas.width} × ${canvas.height} px`;
+    canvas.className = 'mx-auto block h-auto max-h-80 max-w-full rounded border border-line';
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', 'Preview of the image');
+    el.innerHTML = '';
+    el.appendChild(canvas);
+    return { dims };
+  }
+  const grid = pageGrid(el, img.count, 'page');
+  for (let n = 0; n < Math.min(img.count, PREVIEW_PAGES); n++) {
+    const full = await img.page(n);
+    const canvas = document.createElement('canvas');
+    canvas.width = 360;
+    canvas.height = Math.max(1, Math.round(360 * (full.height / full.width)));
+    canvas.getContext('2d').drawImage(full, 0, 0, canvas.width, canvas.height);
+    grid.appendChild(figure(thumb(canvas), `Page ${n + 1}`));
+  }
+  return { pages: img.count };
+}
+
 function previewFor(kind) {
-  return { pdf: previewPdf, docx: previewDocx, xlsx: previewXlsx, pptx: previewPptx, jpg: previewImage, png: previewImage }[kind];
+  return { pdf: previewPdf, docx: previewDocx, xlsx: previewXlsx, pptx: previewPptx, jpg: previewImage, png: previewImage, tiff: previewTiff }[kind];
 }
 
 function showPreviewError(el, message, retry) {
@@ -257,15 +307,25 @@ function showPickError(message) {
   $('pick-error').hidden = false;
 }
 
+// Stops a conversion that is running: at the next page, or at once while a
+// scan is being read.
+function cancelRunning() {
+  if (!state.signal) return;
+  state.signal.cancelled = true;
+  if (state.signal.onCancel) state.signal.onCancel();
+}
+
 function resetToPick() {
-  if (state.signal) state.signal.cancelled = true;
+  cancelRunning();
   releaseUrls();
-  Object.assign(state, { file: null, kind: null, target: null, result: null, signal: null, readable: true });
+  Object.assign(state, { file: null, kind: null, target: null, result: null, signal: null, readable: true, scanned: 'none', pages: 1 });
   $('work').hidden = true;
   $('pick').hidden = false;
   $('file-input').value = '';
   $('source-preview').innerHTML = '';
   $('result-preview').innerHTML = '';
+  $('result-note').hidden = true;
+  $('ocr-lang').hidden = true;
 }
 
 function setBusy(busy) {
@@ -273,6 +333,13 @@ function setBusy(busy) {
   $('convert').hidden = busy || !!state.result;
   $('change').disabled = busy;
   document.querySelectorAll('#targets input').forEach((i) => { i.disabled = busy; });
+  $('ocr-lang-select').disabled = busy;
+}
+
+// Whether converting to the chosen format will read text from a scan.
+function willReadScan() {
+  if (state.target !== 'docx' && state.target !== 'xlsx') return false;
+  return IMAGE_KINDS.includes(state.kind) || (state.kind === 'pdf' && state.scanned !== 'none');
 }
 
 function renderTargets() {
@@ -301,10 +368,22 @@ function selectTarget(t) {
   $('convert').hidden = false;
   $('convert').textContent = `Convert to ${FORMATS[t].label}`;
   $('convert').disabled = !state.readable;
-  $('target-note').textContent = state.kind === 'pdf' ? TARGET_NOTES[t] : SOURCE_NOTES[state.kind];
+  let note;
+  if (state.kind === 'pdf') {
+    note = TARGET_NOTES[t];
+    if (willReadScan()) note += ` ${SCANNED_NOTE}`;
+    else if (PDF_OCR_NOTES[t]) note += ` ${PDF_OCR_NOTES[t]}`;
+  } else if (IMAGE_KINDS.includes(state.kind)) {
+    note = t === 'pdf' && state.pages > 1 ? 'Each page becomes a page of the PDF.' : IMAGE_TARGET_NOTES[t];
+  } else {
+    note = SOURCE_NOTES[state.kind];
+  }
+  $('target-note').textContent = note;
+  $('ocr-lang').hidden = !willReadScan();
 }
 
-async function loadFile(file) {
+// `target` preselects a format, when the file can become it.
+async function loadFile(file, target) {
   $('pick-error').hidden = true;
   let kind;
   try {
@@ -315,17 +394,18 @@ async function loadFile(file) {
     return;
   }
   releaseUrls();
-  if (state.signal) state.signal.cancelled = true;
-  Object.assign(state, { file, kind, result: null, signal: null, readable: true });
+  cancelRunning();
+  Object.assign(state, { file, kind, result: null, signal: null, readable: true, scanned: 'none', pages: 1 });
   $('pick').hidden = true;
   $('work').hidden = false;
   $('result').hidden = true;
   $('convert-error').hidden = true;
+  $('result-note').hidden = true;
   setBusy(false);
   $('source-tile').textContent = FORMATS[kind].ext.toUpperCase();
   $('source-name').textContent = file.name;
   $('source-meta').textContent = `${FORMATS[kind].name} · ${formatBytes(file.size)}`;
-  state.target = TARGETS[kind][0];
+  state.target = TARGETS[kind].includes(target) ? target : TARGETS[kind][0];
   renderTargets();
   selectTarget(state.target);
 
@@ -339,6 +419,13 @@ async function loadFile(file) {
       : info.sheets ? `${info.sheets} ${info.sheets === 1 ? 'sheet' : 'sheets'}`
       : info.dims || '';
     if (extra) $('source-meta').textContent += ` · ${extra}`;
+    if (info.scanned || info.pages) {
+      // Now that the file's pages are known, the note and the language
+      // field can say whether its text will be read from a scan.
+      state.scanned = info.scanned || 'none';
+      state.pages = info.pages || 1;
+      if (!state.signal && !state.result) selectTarget(state.target);
+    }
     if (info.pages > MAX_PAGES) {
       state.readable = false;
       $('convert').disabled = true;
@@ -373,6 +460,7 @@ async function runConvert() {
   try {
     const result = await convert(file, kind, target, {
       signal,
+      language: $('ocr-lang-select').value,
       onProgress: (d, t, label) => { if (!signal.cancelled) setProgress(d, t, label); },
     });
     if (signal.cancelled || state.file !== file) return;
@@ -401,6 +489,10 @@ async function showResult(result) {
   link.href = track(URL.createObjectURL(result.blob));
   link.download = result.name;
   link.textContent = `Download ${result.kind === 'zip' ? 'ZIP file' : fmt.label + ' file'}`;
+  if (result.ocr) $('result-meta').textContent += ' · text read with OCR';
+  const note = result.ocr ? ocrNote(result.ocr, result.kind) : '';
+  $('result-note').textContent = note;
+  $('result-note').hidden = !note;
   $('result').hidden = false;
   const el = $('result-preview');
   skeleton(el);
@@ -410,6 +502,59 @@ async function showResult(result) {
   } catch (e) {
     showPreviewError(el, `The preview couldn't be shown, but the file is ready to download. ${friendly(e)}`);
   }
+}
+
+// "pages 2 and 5", "page 4", "pages 1, 3 and 6"
+function pageList(nums) {
+  if (nums.length === 1) return `page ${nums[0]}`;
+  return `pages ${nums.slice(0, -1).join(', ')} and ${nums[nums.length - 1]}`;
+}
+
+// The note under a result read from a scan, naming the pages that were hard
+// to read or had nothing that could be read. Empty when every page read well.
+function ocrNote(ocr, kind) {
+  const parts = [];
+  if (ocr.hardToRead.length) {
+    parts.push(`Some text on ${pageList(ocr.hardToRead)} was hard to read. Check it before you rely on it. A sharper, straighter scan gives better results.`);
+  }
+  if (ocr.unreadable.length) {
+    const many = ocr.unreadable.length > 1;
+    const kept = kind === 'docx'
+      ? `so ${many ? 'they were' : 'it was'} kept as ${many ? 'pictures' : 'a picture'}`
+      : `so ${many ? 'their sheets are' : 'its sheet is'} empty`;
+    parts.push(`No text could be read on ${pageList(ocr.unreadable)}, ${kept}.`);
+  }
+  return parts.join(' ');
+}
+
+// ── Language of the text ────────────────────────────────────────────────────
+
+// Fills the language field and picks its starting value: the person's last
+// choice here, else their Homeroom language, else their device's, else English.
+async function setUpLanguages() {
+  const select = $('ocr-lang-select');
+  for (const l of OCR_LANGUAGES) {
+    const opt = document.createElement('option');
+    opt.value = l.code;
+    opt.textContent = l.name;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    try { localStorage.setItem(LANGUAGE_KEY, select.value); } catch { /* storage blocked */ }
+  });
+  let saved = null;
+  try { saved = localStorage.getItem(LANGUAGE_KEY); } catch { /* storage blocked */ }
+  if (OCR_LANGUAGES.some((l) => l.code === saved)) {
+    select.value = saved;
+    return;
+  }
+  let tag = null;
+  try {
+    if (window.usernode && window.usernode.getUserLocale) tag = (await window.usernode.getUserLocale()).locale;
+  } catch { /* no platform shell */ }
+  const match = (t) => t && OCR_LANGUAGES.find((l) => l.tag === String(t).toLowerCase().split('-')[0]);
+  const lang = match(tag) || match(navigator.language) || OCR_LANGUAGES[0];
+  select.value = lang.code;
 }
 
 // ── Sample file ─────────────────────────────────────────────────────────────
@@ -445,6 +590,42 @@ async function sampleFile() {
   };
   const blob = await new Promise((resolve) => pdfMake.createPdf(def).getBlob(resolve));
   return new File([blob], 'sample-report.pdf', { type: 'application/pdf' });
+}
+
+// A made-up "scan": the sample report's table drawn as a slightly crooked
+// photo of a printed page, so OCR can be tried without a file.
+async function sampleScan() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1700;
+  canvas.height = 1100;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((1 * Math.PI) / 180);
+  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+  ctx.fillStyle = '#1f2937';
+  ctx.textBaseline = 'alphabetic';
+  const font = 'Arial, Helvetica, sans-serif';
+  ctx.font = `bold 64px ${font}`;
+  ctx.fillText('Sample monthly report', 140, 190);
+  ctx.font = `36px ${font}`;
+  ctx.fillText('Visits and new volunteers at the community garden.', 140, 270);
+  const rows = [
+    ['Month', 'Visits', 'New volunteers'],
+    ['March', '1,240', '18'],
+    ['April', '1,615', '25'],
+    ['May', '2,090', '31'],
+    ['June', '2,480', '27'],
+  ];
+  const cols = [140, 640, 1040];
+  rows.forEach((row, r) => {
+    const y = 400 + r * 110;
+    ctx.font = `${r ? '' : 'bold '}44px ${font}`;
+    row.forEach((text, c) => ctx.fillText(text, cols[c], y));
+  });
+  const blob = await new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('sample scan'))), 'image/png'));
+  return new File([blob], 'sample-scan.png', { type: 'image/png' });
 }
 
 // ── Wiring ──────────────────────────────────────────────────────────────────
@@ -483,11 +664,22 @@ function wire() {
       btn.disabled = false;
     }
   });
+  $('sample-scan').addEventListener('click', async () => {
+    const btn = $('sample-scan');
+    btn.disabled = true;
+    try {
+      await loadFile(await sampleScan(), 'xlsx');
+    } catch (e) {
+      showPickError(friendly(e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $('change').addEventListener('click', () => input.click());
   $('convert').addEventListener('click', runConvert);
   $('retry').addEventListener('click', runConvert);
   $('cancel').addEventListener('click', () => {
-    if (state.signal) state.signal.cancelled = true;
+    cancelRunning();
     state.signal = null;
     setBusy(false);
   });
@@ -498,6 +690,7 @@ function wire() {
 }
 
 wire();
+setUpLanguages();
 // PDF previews need pdf.js straight away, so start loading it now. The other
 // libraries load the first time a conversion or preview needs them.
 lib.pdfjs().then(() => {
