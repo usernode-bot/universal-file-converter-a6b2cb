@@ -29,35 +29,41 @@
  */
 @layer base {
   :root {
-    --ground: 250 250 249;    /* the page */
+    --ground: 248 250 252;    /* the page */
     --surface: 255 255 255;   /* lists, cards, fields */
-    --raised: 245 245 244;    /* hovers, badges */
-    --fg: 28 25 23;           /* text */
-    --muted: 87 83 78;        /* secondary text */
-    --line: 231 229 228;      /* borders, dividers, skeletons */
-    --accent: 15 118 110;     /* the one accent */
+    --raised: 241 245 249;    /* hovers, badges, the preview tray */
+    --fg: 15 23 42;           /* text */
+    --muted: 71 85 105;       /* secondary text */
+    --line: 226 232 240;      /* borders, dividers, skeletons */
+    --accent: 37 99 235;      /* the one accent: ink blue */
     --on-accent: 255 255 255; /* text on the accent */
     --danger: 185 28 28;
     --on-danger: 255 255 255;
-    --focus: 13 148 136;      /* the keyboard focus ring */
+    --focus: 59 130 246;      /* the keyboard focus ring */
   }
   .dark {
-    --ground: 12 10 9;
-    --surface: 28 25 23;
-    --raised: 41 37 36;
-    --fg: 245 245 244;
-    --muted: 168 162 158;
-    --line: 68 64 60;
-    --accent: 45 212 191;
-    --on-accent: 4 47 46;
+    --ground: 2 6 23;
+    --surface: 15 23 42;
+    --raised: 30 41 59;
+    --fg: 241 245 249;
+    --muted: 148 163 184;
+    --line: 51 65 85;
+    --accent: 96 165 250;
+    --on-accent: 23 37 84;
     --danger: 248 113 113;
     --on-danger: 69 10 10;
-    --focus: 94 234 212;
+    --focus: 147 197 253;
   }
   /* el.hidden = true hides an element even when a class gives it a display
      (flex, the components below). */
   [hidden]:where(:not([hidden="until-found"])) {
     display: none !important;
+  }
+  /* The native UI kit's accent follows this app's. */
+  :root,
+  .dark {
+    --un-accent: rgb(var(--accent));
+    --un-accent-contrast: rgb(var(--on-accent));
   }
 }
 
@@ -124,5 +130,81 @@
   .state-empty,
   .state-error {
     @apply flex flex-col items-center gap-2 px-4 py-8 text-center;
+  }
+
+  /* ── This app's own pieces ── */
+
+  /* The drop zone: a dashed tray that lights up while a file is dragged
+     over it (app.js sets data-dragging). */
+  .dropzone {
+    @apply flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-line bg-surface px-4 py-10 text-center
+      transition-colors motion-reduce:transition-none;
+  }
+  .dropzone[data-dragging] {
+    @apply border-accent bg-accent/5;
+  }
+
+  /* The signature: a little document with a folded corner, labelled with
+     its format. The result's tile takes the accent. */
+  .doc-tile {
+    @apply relative flex h-14 w-12 shrink-0 items-end justify-center rounded-md border border-line bg-raised pb-2 text-small font-bold text-muted;
+    clip-path: polygon(0 0, calc(100% - 0.75rem) 0, 100% 0.75rem, 100% 100%, 0 100%);
+  }
+  .doc-tile::after {
+    content: '';
+    @apply absolute right-0 top-0 h-3 w-3 rounded-bl-sm bg-line;
+  }
+  .doc-tile[data-result] {
+    @apply border-accent bg-accent text-on-accent;
+  }
+  .doc-tile[data-result]::after {
+    @apply bg-on-accent/40;
+  }
+
+  /* Format choices: radio buttons drawn as pills. */
+  .choice {
+    @apply inline-flex min-h-11 cursor-pointer items-center rounded-full border border-line bg-surface px-4 text-body text-fg hover:bg-raised;
+  }
+  .choice:has(input:checked) {
+    @apply border-accent bg-accent/10 font-medium text-accent;
+  }
+  .choice:has(input:focus-visible) {
+    @apply ring-2 ring-focus ring-offset-2 ring-offset-ground;
+  }
+
+  /* The tray a preview sits in, and what can go in it. */
+  .preview {
+    @apply max-h-96 overflow-auto rounded-xl border border-line bg-raised p-3;
+  }
+  .page-thumb {
+    @apply block h-auto w-full rounded border border-line;
+  }
+  .doc-preview {
+    @apply rounded-lg bg-surface p-4 text-small text-fg;
+  }
+  .doc-preview h1 { @apply mb-2 text-heading; }
+  .doc-preview h2,
+  .doc-preview h3,
+  .doc-preview h4 { @apply mb-2 text-body font-semibold; }
+  .doc-preview p { @apply mb-2; }
+  .doc-preview ul { @apply mb-2 list-disc pl-5; }
+  .doc-preview ol { @apply mb-2 list-decimal pl-5; }
+  .doc-preview a { @apply text-accent underline; }
+  .doc-preview img { @apply my-2 h-auto max-w-full; }
+  .doc-preview table,
+  .sheet-preview { @apply mb-2 border-collapse text-small; }
+  .doc-preview td,
+  .doc-preview th,
+  .sheet-preview td { @apply border border-line px-2 py-1 align-top; }
+  .sheet-preview { @apply bg-surface; }
+  .sheet-preview td { @apply whitespace-nowrap; }
+  .sheet-preview td.num { @apply text-right tabular-nums; }
+  .sheet-preview .row-head { @apply bg-raised text-center text-muted; }
+
+  .progress-track {
+    @apply h-2 w-full overflow-hidden rounded-full bg-line;
+  }
+  .progress-bar {
+    @apply h-full rounded-full bg-accent transition-all motion-reduce:transition-none;
   }
 }

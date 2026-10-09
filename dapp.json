@@ -1,7 +1,18 @@
 {
-  "description": "Convert files between PDF, Word, Excel and images",
+  "description": "Convert files between PDF, Word, Excel, PowerPoint and images",
   "icon": {
     "emoji": "📄"
   },
-  "secrets": []
+  "secrets": [],
+  "tests": [
+    {
+      "id": "converter.pick",
+      "name": "Converter opens with its file picker and loads pdf.js",
+      "path": "/",
+      "expectSelector": "body[data-converter=\"ready\"] #dropzone #choose",
+      "expectText": "Drop a file here",
+      "visual": true,
+      "impact": ["public/**", "styles/**"]
+    }
+  ]
 }
