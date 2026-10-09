@@ -1,0 +1,7 @@
+{
+  "description": "Convert files between PDF, Word, Excel and images",
+  "icon": {
+    "emoji": "📄"
+  },
+  "secrets": []
+}
