@@ -113,7 +113,7 @@
   <main class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8">
     <header class="flex flex-col gap-1">
       <h1 class="text-title">File converter</h1>
-      <p class="text-body text-muted">Turn a PDF into Word, Excel, PowerPoint or images, or any of those into a PDF. Files are converted on your device and never uploaded.</p>
+      <p class="text-body text-muted">Turn a PDF into Word, Excel, PowerPoint or images, or any of those into a PDF. Scans and photos of documents can become editable Word or Excel files. Files are converted on your device and never uploaded.</p>
     </header>
 
     <!-- Step 1: choose a file -->
@@ -126,15 +126,15 @@
           <path d="m9 15 3-3 3 3"/>
         </svg>
         <p class="text-heading">Drop a file here</p>
-        <p class="text-small text-muted">PDF, Word, Excel, PowerPoint, JPG or PNG, up to 25 MB</p>
+        <p class="text-small text-muted">PDF, Word, Excel, PowerPoint, JPG, PNG or TIFF, up to 25 MB</p>
         <button id="choose" type="button" class="btn-primary">Choose a file</button>
         <input id="file-input" type="file" class="sr-only" tabindex="-1" aria-hidden="true"
-          accept=".pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation">
+          accept=".pdf,.docx,.xlsx,.pptx,.jpg,.jpeg,.png,.tif,.tiff,application/pdf,image/jpeg,image/png,image/tiff,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation">
       </div>
       <div id="pick-error" class="flex items-start gap-3 rounded-xl border border-danger bg-surface p-4" role="alert" hidden>
         <p class="flex-1 text-body"><span class="font-semibold text-danger">Can't use this file.</span> <span id="pick-error-text"></span></p>
       </div>
-      <p class="text-center text-small text-muted">No file to hand? <button id="sample" type="button" class="min-h-11 font-medium text-accent underline">Try a sample PDF</button></p>
+      <p class="text-center text-small text-muted">No file to hand? <button id="sample" type="button" class="min-h-11 font-medium text-accent underline">Try a sample PDF</button> or <button id="sample-scan" type="button" class="min-h-11 font-medium text-accent underline">a sample scan</button></p>
     </section>
 
     <!-- Step 2: preview, choose a format, convert -->
@@ -163,6 +163,13 @@
         <div id="targets" class="flex flex-wrap gap-2"></div>
         <p id="target-note" class="px-1 text-small text-muted"></p>
       </fieldset>
+
+      <!-- Shown only when text will be read from a scan (OCR) -->
+      <div id="ocr-lang" class="flex flex-col gap-2" hidden>
+        <label for="ocr-lang-select" class="px-1 text-small font-medium text-fg">Language of the text</label>
+        <select id="ocr-lang-select" class="field"></select>
+        <p class="px-1 text-small text-muted">Read on your device. The first time, this language's reading data is downloaded (a few MB).</p>
+      </div>
 
       <button id="convert" type="button" class="btn-primary w-full">Convert</button>
 
@@ -196,6 +203,7 @@
               </div>
             </li>
           </ul>
+          <p id="result-note" class="mt-2 px-1 text-small text-muted" hidden></p>
         </div>
         <div>
           <h2 class="section-label">Result preview</h2>

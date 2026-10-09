@@ -13,6 +13,13 @@
       "expectText": "Drop a file here",
       "visual": true,
       "impact": ["public/**", "styles/**"]
+    },
+    {
+      "id": "converter.ocr-entry",
+      "name": "Pick screen offers TIFF and a sample scan",
+      "path": "/",
+      "expectSelector": "body[data-converter=\"ready\"] #sample-scan",
+      "expectText": "TIFF"
     }
   ]
 }

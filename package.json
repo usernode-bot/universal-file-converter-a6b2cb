@@ -10,16 +10,25 @@
     "build:css": "tailwindcss -c tailwind.config.js -i styles/tailwind-input.css -o public/tailwind.css --minify"
   },
   "dependencies": {
+    "@tesseract.js-data/deu": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/fra": "^1.0.0",
+    "@tesseract.js-data/ita": "^1.0.0",
+    "@tesseract.js-data/por": "^1.0.0",
+    "@tesseract.js-data/spa": "^1.0.0",
     "docx": "^9.9.0",
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
+    "pako": "^1.0.11",
     "pdfjs-dist": "^6.4.299",
     "pdfmake": "^0.2.23",
     "pg": "^8.13.0",
-    "pptxgenjs": "^4.0.1"
+    "pptxgenjs": "^4.0.1",
+    "tesseract.js": "^7.0.0",
+    "utif": "^3.1.0"
   },
   "devDependencies": {
     "tailwindcss": "3.4.17"

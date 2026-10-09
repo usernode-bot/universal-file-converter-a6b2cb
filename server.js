@@ -171,6 +171,19 @@ const VENDOR = {
   mammoth: 'mammoth',
   pdfmake: 'pdfmake/build',
   jszip: 'jszip/dist',
+  // On-device OCR: the Tesseract worker, its WebAssembly core and one
+  // reading-data folder per language (OCR_LANGUAGES in public/convert.js).
+  tesseract: 'tesseract.js/dist',
+  'tesseract-core': 'tesseract.js-core',
+  'tessdata/eng': '@tesseract.js-data/eng/4.0.0_best_int',
+  'tessdata/spa': '@tesseract.js-data/spa/4.0.0_best_int',
+  'tessdata/fra': '@tesseract.js-data/fra/4.0.0_best_int',
+  'tessdata/deu': '@tesseract.js-data/deu/4.0.0_best_int',
+  'tessdata/por': '@tesseract.js-data/por/4.0.0_best_int',
+  'tessdata/ita': '@tesseract.js-data/ita/4.0.0_best_int',
+  // TIFF decoding, and the inflate it needs for deflate-compressed TIFFs.
+  utif: 'utif',
+  pako: 'pako/dist',
 };
 for (const [name, dir] of Object.entries(VENDOR)) {
   app.use('/vendor/' + name, express.static(path.join(__dirname, 'node_modules', dir), {

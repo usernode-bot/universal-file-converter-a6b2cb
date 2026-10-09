@@ -12,6 +12,7 @@ export const FORMATS = {
   pptx: { label: 'PowerPoint', name: 'PowerPoint (PPTX)', ext: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
   jpg: { label: 'JPG', name: 'JPG image', ext: 'jpg', mime: 'image/jpeg' },
   png: { label: 'PNG', name: 'PNG image', ext: 'png', mime: 'image/png' },
+  tiff: { label: 'TIFF', name: 'TIFF image', ext: 'tiff', mime: 'image/tiff' },
   zip: { label: 'ZIP', name: 'ZIP archive', ext: 'zip', mime: 'application/zip' },
 };
 
@@ -21,11 +22,14 @@ export const TARGETS = {
   docx: ['pdf'],
   xlsx: ['pdf'],
   pptx: ['pdf'],
-  jpg: ['pdf'],
-  png: ['pdf'],
+  jpg: ['pdf', 'docx', 'xlsx'],
+  png: ['pdf', 'docx', 'xlsx'],
+  tiff: ['pdf', 'docx', 'xlsx'],
 };
 
-const EXT_KIND = { pdf: 'pdf', docx: 'docx', xlsx: 'xlsx', pptx: 'pptx', jpg: 'jpg', jpeg: 'jpg', png: 'png' };
+export const IMAGE_KINDS = ['jpg', 'png', 'tiff'];
+
+const EXT_KIND = { pdf: 'pdf', docx: 'docx', xlsx: 'xlsx', pptx: 'pptx', jpg: 'jpg', jpeg: 'jpg', png: 'png', tif: 'tiff', tiff: 'tiff' };
 const OLD_OFFICE = { doc: 'docx', xls: 'xlsx', ppt: 'pptx' };
 
 export class ConvertError extends Error {}
@@ -42,9 +46,10 @@ export function detectKind(file) {
     if (file.type === 'application/pdf') kind = 'pdf';
     else if (file.type === 'image/jpeg') kind = 'jpg';
     else if (file.type === 'image/png') kind = 'png';
+    else if (file.type === 'image/tiff') kind = 'tiff';
   }
   if (!kind) {
-    throw new ConvertError(`${file.name} isn't a file this app can convert. Use a PDF, Word, Excel, PowerPoint, JPG or PNG file.`);
+    throw new ConvertError(`${file.name} isn't a file this app can convert. Use a PDF, Word, Excel, PowerPoint, JPG, PNG or TIFF file.`);
   }
   if (file.size > MAX_BYTES) {
     throw new ConvertError(`${file.name} is ${formatBytes(file.size)}. Files can be up to ${formatBytes(MAX_BYTES)}.`);
@@ -105,6 +110,13 @@ export const lib = {
     await loadScript('/vendor/pdfmake/pdfmake.min.js');
     await loadScript('/vendor/pdfmake/vfs_fonts.js');
     return window.pdfMake;
+  },
+  async tesseract() { await loadScript('/vendor/tesseract/tesseract.min.js'); return window.Tesseract; },
+  async utif() {
+    // UTIF picks up pako (for deflate-compressed TIFFs) when it loads.
+    await loadScript('/vendor/pako/pako_inflate.min.js');
+    await loadScript('/vendor/utif/UTIF.js');
+    return window.UTIF;
   },
 };
 
@@ -205,6 +217,12 @@ async function pdfPageLines(page) {
     const size = Math.hypot(a, b) || it.height || 10;
     items.push({ str: it.str, x: e, y: vp.height - f, w: it.width, size });
   }
+  return groupLines(items);
+}
+
+// Groups positioned runs ({ str, x, y, w, size }) into lines, top to bottom,
+// each with its runs left to right.
+function groupLines(items) {
   items.sort((p, q) => p.y - q.y || p.x - q.x);
   const lines = [];
   for (const it of items) {
@@ -281,117 +299,391 @@ async function pdfToImages(file, target, { onProgress, signal }) {
   return { blob, name: `${base}-${fmt.ext}.zip`, kind: 'zip', images: pages };
 }
 
+// ── Reading text from scans (OCR) ───────────────────────────────────────────
+//
+// Pages with no text of their own (scans, photos) are read with Tesseract,
+// in a worker on the visitor's device. Its words come back as the same lines
+// of positioned runs that pdfPageLines gives, so Word and Excel are built the
+// same way whichever way the text was found.
+
+export const OCR_LANGUAGES = [
+  { code: 'eng', tag: 'en', name: 'English' },
+  { code: 'spa', tag: 'es', name: 'Spanish' },
+  { code: 'fra', tag: 'fr', name: 'French' },
+  { code: 'deu', tag: 'de', name: 'German' },
+  { code: 'por', tag: 'pt', name: 'Portuguese' },
+  { code: 'ita', tag: 'it', name: 'Italian' },
+];
+export const MAX_OCR_PAGES = 50;
+
+const NO_TEXT = 'No text could be read from this scan. It may be blurry, too small, sideways or handwritten, or in a different language from the one chosen. Try a sharper scan, or change the language.';
+
+// The worker and its files are fetched from inside a worker, where a
+// relative path has nothing to resolve against.
+const absolute = (path) => new URL(path, location.href).href;
+
+// Starts the text reader for one language. read() takes a page's canvas and
+// resolves { lines, confidence }; close() frees the worker. Cancelling the
+// conversion (signal.onCancel) stops it straight away.
+async function createOcr(language, total, { onProgress, signal }) {
+  const lang = OCR_LANGUAGES.find((l) => l.code === language) || OCR_LANGUAGES[0];
+  onProgress(0, total, 'Getting the text reader ready');
+  const Tesseract = await lib.tesseract();
+  check(signal);
+  let stopped = false;
+  let worker = null;
+  let page = null;
+  let stop;
+  const stopped$ = new Promise((_, reject) => { stop = reject; });
+  stopped$.catch(() => {});
+  // Waits for a call to the worker unless the conversion is cancelled first.
+  // A call left behind by a cancel fails on its own later; that is expected.
+  const unlessStopped = (p) => {
+    p.catch(() => {});
+    return Promise.race([p, stopped$]);
+  };
+  signal.onCancel = () => {
+    if (stopped) return;
+    stopped = true;
+    if (worker) worker.terminate().catch(() => {});
+    stop(new Cancelled('Cancelled'));
+  };
+  const logger = (m) => {
+    if (stopped || signal.cancelled) return;
+    if (m.status === 'recognizing text' && page) {
+      onProgress(page.i - 1 + Math.min(1, m.progress || 0), page.total, `Reading the scanned text on page ${page.i} of ${page.total}`);
+    } else if (m.status === 'loading language traineddata' && !page && m.progress < 1) {
+      onProgress(0, total, `Downloading the ${lang.name} reading data`);
+    }
+  };
+  const pending = Tesseract.createWorker(lang.code, 1 /* LSTM only */, {
+    workerPath: absolute('/vendor/tesseract/worker.min.js'),
+    corePath: absolute('/vendor/tesseract-core/'),
+    langPath: absolute(`/vendor/tessdata/${lang.code}`),
+    gzip: true,
+    logger,
+    // Failures reach us as rejected promises; without a handler the
+    // library also throws them uncaught.
+    errorHandler: () => {},
+  });
+  pending.then((w) => { if (stopped) w.terminate().catch(() => {}); }, () => {});
+  try {
+    worker = await unlessStopped(pending);
+    await unlessStopped(worker.setParameters({ preserve_interword_spaces: '1' }));
+  } catch (e) {
+    if (e instanceof Cancelled) throw e;
+    console.warn('OCR failed to start', e);
+    throw new ConvertError(`The ${lang.name} reading data couldn't be downloaded. Check your connection and try again.`);
+  }
+  return {
+    language: lang.code,
+    async read(canvas, ptWidth, i) {
+      page = { i, total };
+      onProgress(i - 1, total, `Reading the scanned text on page ${i} of ${total}`);
+      // Handed over as PNG bytes, which the library posts to its worker at
+      // once: given a canvas it encodes it first, and a cancel in that gap
+      // leaves it posting to a worker that has gone.
+      const png = new Uint8Array(await (await canvasToBlob(canvas, 'image/png')).arrayBuffer());
+      check(signal);
+      let data;
+      try {
+        ({ data } = await unlessStopped(worker.recognize(png, {}, { text: false, blocks: true })));
+      } catch (e) {
+        if (e instanceof Cancelled) throw e;
+        console.warn('OCR failed', e);
+        throw new ConvertError(`The text on page ${i} couldn't be read. The page may be too large, or the device ran out of memory.`);
+      }
+      return ocrLines(data, ptWidth / canvas.width);
+    },
+    async close() {
+      stopped = true;
+      signal.onCancel = null;
+      if (worker) await worker.terminate().catch(() => {});
+    },
+  };
+}
+
+// Tesseract's words as lines of runs, in points (k points per pixel). The
+// page's skew, measured from the baselines, is taken out first so a slightly
+// crooked scan still lines up into rows. Words read with very low confidence
+// are dropped; `confidence` is the mean of the rest, weighted by length.
+function ocrLines(data, k) {
+  const words = [];
+  const slopes = [];
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        const bl = line.baseline;
+        if (bl && bl.x1 - bl.x0 > 100) slopes.push((bl.y1 - bl.y0) / (bl.x1 - bl.x0));
+        words.push(...(line.words || []));
+      }
+    }
+  }
+  const slope = median(slopes);
+  const items = [];
+  let sum = 0;
+  let chars = 0;
+  for (const word of words) {
+    const str = (word.text || '').trim();
+    // Table rules and borders come back as runs of dashes or bars.
+    if (!str || word.confidence < 30 || /^([-—–_=~]{2,}|\|+)$/.test(str)) continue;
+    const { x0, y0, x1, y1 } = word.bbox;
+    const y = (y0 + y1) / 2 - slope * ((x0 + x1) / 2);
+    // A word's box is about 0.7 of the type's size.
+    items.push({ str, x: x0 * k, y: y * k, w: (x1 - x0) * k, size: ((y1 - y0) * k) / 0.7 });
+    sum += word.confidence * str.length;
+    chars += str.length;
+  }
+  const lines = groupLines(items);
+  // Every run in a line takes the line's typical size, so a word with no
+  // capitals or descenders doesn't read as smaller type.
+  for (const l of lines) {
+    l.size = median(l.items.map((it) => it.size));
+    for (const it of l.items) it.size = l.size;
+  }
+  return { lines, confidence: chars ? sum / chars : 0 };
+}
+
+function greyscale(canvas) {
+  const ctx = canvas.getContext('2d');
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  for (let p = 0; p < d.length; p += 4) {
+    const v = Math.round(d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114);
+    d[p] = v;
+    d[p + 1] = v;
+    d[p + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+// A PDF page drawn for reading: about 300 dpi, at most 4000 px a side, grey.
+async function ocrPdfCanvas(page) {
+  const vp = page.getViewport({ scale: 1 });
+  return greyscale(await renderPdfPage(page, Math.min(300 / 72, 4000 / Math.max(vp.width, vp.height))));
+}
+
+// A grey copy of an image for reading: small images are doubled, and none is
+// more than 4000 px a side.
+function ocrImageCanvas(source) {
+  const long = Math.max(source.width, source.height);
+  const s = Math.min(long < 1500 ? 2 : 1, 4000 / long);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * s));
+  canvas.height = Math.max(1, Math.round(source.height * s));
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return greyscale(canvas);
+}
+
+// What happened to each page read with OCR, for the note under the result.
+function ocrReport(language) {
+  return { language, pagesRead: [], hardToRead: [], unreadable: [] };
+}
+function notePage(report, i, read) {
+  report.pagesRead.push(i);
+  if (!read.lines.length) report.unreadable.push(i);
+  else if (read.confidence < 70) report.hardToRead.push(i);
+}
+
+// Numbers misread as letters, in a cell that is otherwise a number: O for 0,
+// l or I for 1, and a stray full stop or comma at the end.
+function ocrNumber(text) {
+  if (!/^[-+]?[\dOolI.,]*\d[\dOolI.,]*$/.test(text)) return text;
+  return text.replace(/[Oo]/g, '0').replace(/[lI]/g, '1').replace(/[.,]$/, '');
+}
+
+// The page numbers of a PDF with no text of their own.
+async function textlessPages(pdf, { onProgress, signal }) {
+  const out = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    check(signal);
+    onProgress(0, pdf.numPages, 'Checking the pages for text');
+    const page = await pdf.getPage(i);
+    if (!(await pdfPageLines(page)).length) out.push(i);
+    page.cleanup();
+  }
+  if (out.length > MAX_OCR_PAGES) {
+    throw new ConvertError(`This PDF has ${out.length} scanned pages. Up to ${MAX_OCR_PAGES} scanned pages can be read at a time. Split it and try again.`);
+  }
+  return out;
+}
+
 // ── PDF to Word ─────────────────────────────────────────────────────────────
 
-async function pdfToDocx(file, { onProgress, signal }) {
+// Lines of text as Word paragraphs: bigger type becomes headings, lines close
+// together join into one paragraph, and a row of a table keeps its cells
+// apart with tabs.
+function linesToParagraphs(docx, lines) {
+  const out = [];
+  const body = median(lines.map((l) => l.size));
+  let para = null;
+  let prev = null;
+  const flush = () => {
+    if (!para) return;
+    const big = para.size > body * 1.6 ? docx.HeadingLevel.HEADING_1 : para.size > body * 1.25 ? docx.HeadingLevel.HEADING_2 : null;
+    const runs = para.cells
+      ? para.cells.map((t, k) => (k ? new docx.TextRun({ children: [new docx.Tab(), t] }) : new docx.TextRun(t)))
+      : [new docx.TextRun(para.text)];
+    out.push(new docx.Paragraph({ heading: big || undefined, children: runs, spacing: { after: 120 } }));
+    para = null;
+  };
+  for (const line of lines) {
+    const cells = lineCells(line, 0.5).map((c) => c.text);
+    if (!cells.length) continue;
+    const text = cells.join(' ');
+    const gap = prev ? line.y - prev.y : 0;
+    const sameStyle = para && !para.cells && Math.abs(line.size - para.size) < body * 0.15;
+    if (cells.length === 1 && sameStyle && gap < line.size * 1.8) {
+      para.text = /-$/.test(para.text) ? para.text.slice(0, -1) + text : para.text + ' ' + text;
+    } else {
+      flush();
+      para = { text, size: line.size, cells: cells.length > 1 ? cells : null };
+    }
+    prev = line;
+  }
+  flush();
+  return out;
+}
+
+// A page kept as a picture, as wide as the page allows. width and height are
+// the page's size in points.
+async function pictureParagraph(docx, canvas, width, height) {
+  const data = new Uint8Array(await (await canvasToBlob(canvas, 'image/jpeg', 0.9)).arrayBuffer());
+  const w = Math.min(624, width * (96 / 72)); // 6.5 in at 96 px/in
+  return new docx.Paragraph({
+    children: [new docx.ImageRun({ type: 'jpg', data, transformation: { width: w, height: w * (height / width) } })],
+  });
+}
+
+async function pdfToDocx(file, o) {
+  const { onProgress, signal } = o;
   const docx = await lib.docx();
   const pdf = await openPdfToConvert(file);
   const total = pdf.numPages;
   const children = [];
-  for (let i = 1; i <= total; i++) {
-    check(signal);
-    onProgress(i - 1, total, `Reading the text on page ${i} of ${total}`);
-    const page = await pdf.getPage(i);
-    const lines = await pdfPageLines(page);
-    if (i > 1) children.push(new docx.Paragraph({ children: [new docx.PageBreak()] }));
-    if (!lines.length) {
-      // No text layer (a scan or a picture): keep the page as an image.
-      const vp = page.getViewport({ scale: 1 });
-      const canvas = await renderPdfPage(page, exportScale(page));
-      const data = new Uint8Array(await (await canvasToBlob(canvas, 'image/jpeg', 0.9)).arrayBuffer());
-      const width = Math.min(624, vp.width * (96 / 72)); // 6.5 in at 96 px/in
-      children.push(new docx.Paragraph({
-        children: [new docx.ImageRun({ type: 'jpg', data, transformation: { width, height: width * (vp.height / vp.width) } })],
-      }));
-    } else {
-      const body = median(lines.map((l) => l.size));
-      let para = null;
-      let prev = null;
-      const flush = () => {
-        if (!para) return;
-        const big = para.size > body * 1.6 ? docx.HeadingLevel.HEADING_1 : para.size > body * 1.25 ? docx.HeadingLevel.HEADING_2 : null;
-        // A row of a table keeps its cells apart with tabs.
-        const runs = para.cells
-          ? para.cells.map((t, k) => (k ? new docx.TextRun({ children: [new docx.Tab(), t] }) : new docx.TextRun(t)))
-          : [new docx.TextRun(para.text)];
-        children.push(new docx.Paragraph({ heading: big || undefined, children: runs, spacing: { after: 120 } }));
-        para = null;
-      };
-      for (const line of lines) {
-        const cells = lineCells(line, 0.5).map((c) => c.text);
-        if (!cells.length) continue;
-        const text = cells.join(' ');
-        const gap = prev ? line.y - prev.y : 0;
-        const sameStyle = para && !para.cells && Math.abs(line.size - para.size) < body * 0.15;
-        if (cells.length === 1 && sameStyle && gap < line.size * 1.8) {
-          para.text = /-$/.test(para.text) ? para.text.slice(0, -1) + text : para.text + ' ' + text;
-        } else {
-          flush();
-          para = { text, size: line.size, cells: cells.length > 1 ? cells : null };
-        }
-        prev = line;
-      }
-      flush();
+  let ocr = null;
+  let report = null;
+  let anyText = false;
+  try {
+    const scanned = await textlessPages(pdf, o);
+    if (scanned.length) {
+      ocr = await createOcr(o.language, total, o);
+      report = ocrReport(ocr.language);
     }
-    page.cleanup();
+    for (let i = 1; i <= total; i++) {
+      check(signal);
+      const page = await pdf.getPage(i);
+      let lines;
+      if (scanned.includes(i)) {
+        const read = await ocr.read(await ocrPdfCanvas(page), page.getViewport({ scale: 1 }).width, i);
+        notePage(report, i, read);
+        lines = read.lines;
+      } else {
+        onProgress(i - 1, total, `Reading the text on page ${i} of ${total}`);
+        lines = await pdfPageLines(page);
+      }
+      if (i > 1) children.push(new docx.Paragraph({ children: [new docx.PageBreak()] }));
+      if (!lines.length) {
+        // No text could be read: keep the page as a picture.
+        const vp = page.getViewport({ scale: 1 });
+        children.push(await pictureParagraph(docx, await renderPdfPage(page, exportScale(page)), vp.width, vp.height));
+      } else {
+        children.push(...linesToParagraphs(docx, lines));
+        anyText = true;
+      }
+      page.cleanup();
+    }
+  } finally {
+    if (ocr) await ocr.close();
+    await closePdf(pdf);
   }
-  await closePdf(pdf);
+  if (!anyText && report) throw new ConvertError(NO_TEXT);
   check(signal);
   onProgress(total, total, 'Writing the Word document');
   const doc = new docx.Document({ sections: [{ children: children }] });
   const blob = await docx.Packer.toBlob(doc);
-  return { blob, name: `${baseName(file.name)}.docx`, kind: 'docx' };
+  return { blob, name: `${baseName(file.name)}.docx`, kind: 'docx', ocr: report };
 }
 
 // ── PDF to Excel ────────────────────────────────────────────────────────────
 
 const NUMBER = /^[-+]?(\d{1,3}(,\d{3})+|\d+)?(\.\d+)?$/;
 
-async function pdfToXlsx(file, { onProgress, signal }) {
+// Puts lines of cells into a sheet: cells whose left edges line up go in one
+// column, and numbers become numbers. `ocr` tidies numbers read from a scan.
+// Says whether anything was written.
+function fillSheet(ws, cellLines, ocr) {
+  let anyText = false;
+  // Column starts: every cell's left edge, merged when within 8 points.
+  const xs = cellLines.flat().map((c) => c.x).sort((a, b) => a - b);
+  const cols = [];
+  for (const x of xs) {
+    if (!cols.length || x - cols[cols.length - 1].max > 8) cols.push({ min: x, max: x });
+    else cols[cols.length - 1].max = x;
+  }
+  const widths = cols.map(() => 8);
+  cellLines.forEach((cells, r) => {
+    for (const c of cells) {
+      let col = 0;
+      for (let k = 0; k < cols.length; k++) if (c.x >= cols[k].min - 8) col = k;
+      const cell = ws.getCell(r + 1, col + 1);
+      const prior = cell.value == null ? '' : String(cell.value) + ' ';
+      const text = prior + (ocr ? ocrNumber(c.text) : c.text);
+      const numeric = !prior && text.length < 16 && NUMBER.test(text) && /\d/.test(text);
+      cell.value = numeric ? Number(text.replace(/,/g, '')) : text;
+      if (numeric && text.includes(',')) cell.numFmt = text.includes('.') ? '#,##0.00' : '#,##0';
+      widths[col] = Math.min(60, Math.max(widths[col], text.length + 2));
+      anyText = true;
+    }
+  });
+  widths.forEach((w, k) => { ws.getColumn(k + 1).width = w; });
+  return anyText;
+}
+
+async function pdfToXlsx(file, o) {
+  const { onProgress, signal } = o;
   const ExcelJS = await lib.exceljs();
   const pdf = await openPdfToConvert(file);
   const total = pdf.numPages;
   const wb = new ExcelJS.Workbook();
   let anyText = false;
-  for (let i = 1; i <= total; i++) {
-    check(signal);
-    onProgress(i - 1, total, `Finding the rows and columns on page ${i} of ${total}`);
-    const page = await pdf.getPage(i);
-    const lines = (await pdfPageLines(page)).map((l) => lineCells(l, 0.5));
-    page.cleanup();
-    const ws = wb.addWorksheet(`Page ${i}`);
-    // Column starts: every cell's left edge, merged when within 8 points.
-    const xs = lines.flat().map((c) => c.x).sort((a, b) => a - b);
-    const cols = [];
-    for (const x of xs) {
-      if (!cols.length || x - cols[cols.length - 1].max > 8) cols.push({ min: x, max: x });
-      else cols[cols.length - 1].max = x;
+  let ocr = null;
+  let report = null;
+  try {
+    const scanned = await textlessPages(pdf, o);
+    if (scanned.length) {
+      ocr = await createOcr(o.language, total, o);
+      report = ocrReport(ocr.language);
     }
-    const widths = cols.map(() => 8);
-    lines.forEach((cells, r) => {
-      for (const c of cells) {
-        let col = 0;
-        for (let k = 0; k < cols.length; k++) if (c.x >= cols[k].min - 8) col = k;
-        const cell = ws.getCell(r + 1, col + 1);
-        const prior = cell.value == null ? '' : String(cell.value) + ' ';
-        const text = prior + c.text;
-        const numeric = !prior && text.length < 16 && NUMBER.test(text) && /\d/.test(text);
-        cell.value = numeric ? Number(text.replace(/,/g, '')) : text;
-        if (numeric && text.includes(',')) cell.numFmt = text.includes('.') ? '#,##0.00' : '#,##0';
-        widths[col] = Math.min(60, Math.max(widths[col], text.length + 2));
-        anyText = true;
+    for (let i = 1; i <= total; i++) {
+      check(signal);
+      const page = await pdf.getPage(i);
+      let lines;
+      if (scanned.includes(i)) {
+        const read = await ocr.read(await ocrPdfCanvas(page), page.getViewport({ scale: 1 }).width, i);
+        notePage(report, i, read);
+        lines = read.lines;
+      } else {
+        onProgress(i - 1, total, `Finding the rows and columns on page ${i} of ${total}`);
+        lines = await pdfPageLines(page);
       }
-    });
-    widths.forEach((w, k) => { ws.getColumn(k + 1).width = w; });
+      page.cleanup();
+      const ws = wb.addWorksheet(`Page ${i}`);
+      if (fillSheet(ws, lines.map((l) => lineCells(l, 0.5)), scanned.includes(i))) anyText = true;
+    }
+  } finally {
+    if (ocr) await ocr.close();
+    await closePdf(pdf);
   }
-  await closePdf(pdf);
-  if (!anyText) {
-    throw new ConvertError("This PDF has no text to put in a spreadsheet. It may be a scan or a picture. Try converting it to JPG or Word instead.");
-  }
+  if (!anyText) throw new ConvertError(NO_TEXT);
   check(signal);
   onProgress(total, total, 'Writing the Excel workbook');
   const buf = await wb.xlsx.writeBuffer();
-  return { blob: new Blob([buf], { type: FORMATS.xlsx.mime }), name: `${baseName(file.name)}.xlsx`, kind: 'xlsx' };
+  return { blob: new Blob([buf], { type: FORMATS.xlsx.mime }), name: `${baseName(file.name)}.xlsx`, kind: 'xlsx', ocr: report };
 }
 
 // ── PDF to PowerPoint ───────────────────────────────────────────────────────
@@ -456,24 +748,136 @@ export async function imageToCanvas(blob, maxSide = 6000) {
   return canvas;
 }
 
+// The pages of an image: one for a JPG or PNG, one per page of a TIFF.
+// page(n) decodes page n (from 0) onto a canvas only when it is asked for,
+// so a long TIFF never holds every page in memory at once.
+export async function openImage(file, kind) {
+  if (kind !== 'tiff') return { count: 1, page: () => imageToCanvas(file) };
+  const UTIF = await lib.utif();
+  const buf = await file.arrayBuffer();
+  const unreadable = () => new ConvertError("This TIFF couldn't be read. Save it as PNG or PDF and try again.");
+  let ifds;
+  try {
+    // Reduced-size copies (thumbnails) are left out.
+    ifds = UTIF.decode(buf).filter((ifd) => ifd.t256 && ifd.t257 && !(ifd.t254 && ifd.t254[0] & 1));
+  } catch {
+    throw unreadable();
+  }
+  if (!ifds.length) throw unreadable();
+  if (ifds.length > MAX_PAGES) throw new ConvertError(`This TIFF has ${ifds.length} pages. Images can have up to ${MAX_PAGES} pages.`);
+  return {
+    count: ifds.length,
+    async page(n) {
+      const ifd = ifds[n];
+      let rgba;
+      try {
+        UTIF.decodeImage(buf, ifd);
+        rgba = UTIF.toRGBA8(ifd);
+      } catch {
+        throw unreadable();
+      }
+      if (!ifd.width || !ifd.height || rgba.length < ifd.width * ifd.height * 4) throw unreadable();
+      const full = document.createElement('canvas');
+      full.width = ifd.width;
+      full.height = ifd.height;
+      full.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, ifd.width * ifd.height * 4), ifd.width, ifd.height), 0, 0);
+      delete ifd.data;
+      const scale = Math.min(1, 6000 / Math.max(full.width, full.height));
+      if (scale === 1) return full;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(full.width * scale);
+      canvas.height = Math.round(full.height * scale);
+      canvas.getContext('2d').drawImage(full, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    },
+  };
+}
+
 async function imageToPdf(file, kind, { onProgress, signal }) {
   onProgress(0, 2, 'Reading the image');
   const pdfMake = await lib.pdfmake();
-  const canvas = await imageToCanvas(file);
+  const img = await openImage(file, kind);
+  const total = img.count;
+  const content = [];
+  let width = 0;
+  let height = 0;
+  for (let n = 0; n < total; n++) {
+    check(signal);
+    if (total > 1) onProgress(n, total + 1, `Reading page ${n + 1} of ${total}`);
+    const canvas = await img.page(n);
+    const data = canvas.toDataURL(kind === 'jpg' ? 'image/jpeg' : 'image/png', 0.92);
+    if (!n) {
+      // The page takes the (first) image's shape, with its long side as long as A4's.
+      const k = 842 / Math.max(canvas.width, canvas.height);
+      width = canvas.width * k;
+      height = canvas.height * k;
+      content.push({ image: data, width, height });
+    } else {
+      // Later pages of a TIFF fit inside the same page size, centred.
+      content.push({ image: data, fit: [width, height], alignment: 'center', pageBreak: 'before' });
+    }
+  }
   check(signal);
-  onProgress(1, 2, 'Writing the PDF');
-  const data = canvas.toDataURL(kind === 'png' ? 'image/png' : 'image/jpeg', 0.92);
-  // The page takes the image's shape, with its long side as long as A4's.
-  const k = 842 / Math.max(canvas.width, canvas.height);
-  const width = canvas.width * k;
-  const height = canvas.height * k;
+  onProgress(total, total + 1, 'Writing the PDF');
   const blob = await pdfMakeBlob(pdfMake, {
     pageSize: { width, height },
     pageMargins: 0,
-    content: [{ image: data, width, height }],
+    content,
     info: { title: baseName(file.name) },
   });
   return { blob, name: `${baseName(file.name)}.pdf`, kind: 'pdf' };
+}
+
+// ── Images to Word and Excel (OCR) ──────────────────────────────────────────
+
+// Images have no page size of their own: their text is measured as if each
+// page were 612 points (US Letter) wide.
+const IMAGE_PAGE_WIDTH = 612;
+
+async function imageToOffice(file, kind, target, o) {
+  const { onProgress, signal } = o;
+  onProgress(0, 1, 'Reading the image');
+  const img = await openImage(file, kind);
+  const total = img.count;
+  if (total > MAX_OCR_PAGES) {
+    throw new ConvertError(`This TIFF has ${total} pages. Up to ${MAX_OCR_PAGES} scanned pages can be read at a time. Split it and try again.`);
+  }
+  const docx = target === 'docx' ? await lib.docx() : null;
+  const ExcelJS = target === 'xlsx' ? await lib.exceljs() : null;
+  const wb = ExcelJS ? new ExcelJS.Workbook() : null;
+  const children = [];
+  const ocr = await createOcr(o.language, total, o);
+  const report = ocrReport(ocr.language);
+  let anyText = false;
+  try {
+    for (let i = 1; i <= total; i++) {
+      check(signal);
+      const canvas = await img.page(i - 1);
+      const read = await ocr.read(ocrImageCanvas(canvas), IMAGE_PAGE_WIDTH, i);
+      notePage(report, i, read);
+      if (read.lines.length) anyText = true;
+      if (docx) {
+        if (i > 1) children.push(new docx.Paragraph({ children: [new docx.PageBreak()] }));
+        if (read.lines.length) children.push(...linesToParagraphs(docx, read.lines));
+        else children.push(await pictureParagraph(docx, canvas, IMAGE_PAGE_WIDTH, IMAGE_PAGE_WIDTH * (canvas.height / canvas.width)));
+      } else {
+        fillSheet(wb.addWorksheet(`Page ${i}`), read.lines.map((l) => lineCells(l, 0.5)), true);
+      }
+    }
+  } finally {
+    await ocr.close();
+  }
+  if (!anyText) throw new ConvertError(NO_TEXT);
+  check(signal);
+  const base = baseName(file.name);
+  if (docx) {
+    onProgress(total, total, 'Writing the Word document');
+    const blob = await docx.Packer.toBlob(new docx.Document({ sections: [{ children }] }));
+    return { blob, name: `${base}.docx`, kind: 'docx', ocr: report };
+  }
+  onProgress(total, total, 'Writing the Excel workbook');
+  const buf = await wb.xlsx.writeBuffer();
+  return { blob: new Blob([buf], { type: FORMATS.xlsx.mime }), name: `${base}.xlsx`, kind: 'xlsx', ocr: report };
 }
 
 // ── Word to PDF ─────────────────────────────────────────────────────────────
@@ -1069,11 +1473,14 @@ async function pptxToPdf(file, { onProgress, signal }) {
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 // Converts `file` (of `kind`) to `target`. Resolves { blob, name, kind,
-// images? }, where kind is the result's own format (zip when a many-page
-// PDF became images). onProgress(done, total, label) reports each step;
-// setting signal.cancelled stops at the next page.
+// images?, ocr? }, where kind is the result's own format (zip when a
+// many-page PDF became images) and ocr says which pages were read from a
+// scan. onProgress(done, total, label) reports each step; setting
+// signal.cancelled stops at the next page, and calling signal.onCancel(),
+// when set, stops reading a scan straight away. opts.language is the OCR
+// language code (OCR_LANGUAGES).
 export async function convert(file, kind, target, opts = {}) {
-  const o = { onProgress: opts.onProgress || (() => {}), signal: opts.signal || {} };
+  const o = { onProgress: opts.onProgress || (() => {}), signal: opts.signal || {}, language: opts.language || 'eng' };
   if (!(TARGETS[kind] || []).includes(target)) throw new ConvertError(`${FORMATS[kind].label} files can't be converted to ${FORMATS[target].label}.`);
   if (kind === 'pdf') {
     if (target === 'jpg' || target === 'png') return pdfToImages(file, target, o);
@@ -1081,7 +1488,9 @@ export async function convert(file, kind, target, opts = {}) {
     if (target === 'xlsx') return pdfToXlsx(file, o);
     if (target === 'pptx') return pdfToPptx(file, o);
   }
-  if (kind === 'jpg' || kind === 'png') return imageToPdf(file, kind, o);
+  if (IMAGE_KINDS.includes(kind)) {
+    return target === 'pdf' ? imageToPdf(file, kind, o) : imageToOffice(file, kind, target, o);
+  }
   if (kind === 'docx') return docxToPdf(file, o);
   if (kind === 'xlsx') return xlsxToPdf(file, o);
   if (kind === 'pptx') return pptxToPdf(file, o);
