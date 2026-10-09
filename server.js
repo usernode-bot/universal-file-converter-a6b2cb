@@ -145,7 +145,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health', (_req, res) => {
+  if (shuttingDown) return res.status(503).json({ status: 'shutting_down' });
+  res.json({ status: 'ok' });
+});
 
 // The template ships no favicon file; index.html carries an inline SVG
 // icon instead. Answer 204 here so anything that still probes
@@ -155,6 +158,26 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Browser builds of the conversion libraries, served straight from their npm
+// packages. Every conversion runs in the visitor's browser, so a file never
+// leaves their device and this server holds no uploads. The page loads each
+// library only when a conversion or preview needs it.
+const VENDOR = {
+  pdfjs: 'pdfjs-dist', // legacy/build, cmaps, standard_fonts, wasm
+  docx: 'docx/dist',
+  exceljs: 'exceljs/dist',
+  pptxgenjs: 'pptxgenjs/dist',
+  mammoth: 'mammoth',
+  pdfmake: 'pdfmake/build',
+  jszip: 'jszip/dist',
+};
+for (const [name, dir] of Object.entries(VENDOR)) {
+  app.use('/vendor/' + name, express.static(path.join(__dirname, 'node_modules', dir), {
+    maxAge: '1h',
+    index: false,
+  }));
+}
 
 // HTML shell: serve the app if authenticated. Unauthenticated top-level
 // visits (share links pasted into a browser — Sec-Fetch-Dest: document)
@@ -191,8 +214,35 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Every deploy stops this container with SIGTERM: stop taking connections,
+// let in-flight requests finish for a moment, close the pool and exit.
+const DRAIN_MS = 3000;
+let server = null;
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received, draining`);
+  if (server) {
+    server.close(() => {});
+    server.closeIdleConnections?.();
+    const t = setTimeout(() => server.closeAllConnections?.(), DRAIN_MS);
+    t.unref?.();
+  }
+  try {
+    await pool.end();
+  } catch (e) {
+    console.error('[shutdown] pool.end failed', e.message);
+  }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 async function start() {
-  const server = app.listen(port, () => console.log(`Listening on :${port}`));
+  server = app.listen(port, () => console.log(`Listening on :${port}`));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.
   server.keepAliveTimeout = 75_000;
 }

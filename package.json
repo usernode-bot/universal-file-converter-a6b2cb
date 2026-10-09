@@ -10,9 +10,16 @@
     "build:css": "tailwindcss -c tailwind.config.js -i styles/tailwind-input.css -o public/tailwind.css --minify"
   },
   "dependencies": {
+    "docx": "^9.9.0",
+    "exceljs": "^4.4.0",
     "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.4.299",
+    "pdfmake": "^0.2.23",
     "pg": "^8.13.0",
-    "jsonwebtoken": "^9.0.2"
+    "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
     "tailwindcss": "3.4.17"

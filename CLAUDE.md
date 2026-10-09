@@ -97,24 +97,26 @@ tables you've marked private), etc.
 
 ## About Universal File Converter
 
-Convert files between PDF, Word, Excel and images
+Convert files between PDF, Word, Excel, PowerPoint and images.
 
-_(add a sentence or two more of product context here so Claude Code has a
-shared understanding of what this app is for)_
+One screen: pick a file (drag and drop or a picker), preview it, choose a
+target format, convert, preview the result and download it. All conversions
+run in the browser (`public/convert.js`), so files never leave the device;
+the server only serves the page and the libraries' browser builds under
+`/vendor/` (see `server.js`). Platform file storage is not used: it accepts
+images only, and nothing needs keeping.
 
 ## Design
 
 This app's look. The first real version fills in the blanks; every later
 change follows it, and updates it when a request changes the look on purpose.
 
-- **Palette:** _(name the accent, any second colour and the neutrals, e.g.
-  "accent: tomato red; second: basil green; neutrals: warm greys")_
-- **Signature element:** _(the one thing on screen drawn from this app's
-  subject, which no other app would have)_
+- **Palette:** accent: ink blue; neutrals: cool slate greys.
+- **Signature element:** the document tile, a small page with a folded
+  corner labelled with its format (`.doc-tile`). The converted file's tile
+  takes the accent.
 - **Type scale:** `text-title`, `text-heading`, `text-body`, `text-small`
   _(change their sizes in `tailwind.config.js` if you must, not their number)_
-- **One fixed look:** _(only for an app drawn as its own scene, such as a
-  game: which look, and why. Otherwise delete this line.)_
 
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
@@ -139,6 +141,9 @@ Re-theme by changing the token values there, keeping every text pair at
 
 ## App-specific conventions
 
-_(optional — e.g. "all currency values stored as integer cents, not
-floats"; "the `posts` table is append-only"; "avoid adding new
-dependencies"; etc.)_
+- No database tables: the app keeps nothing.
+- A new conversion goes in `public/convert.js` (`TARGETS` and `convert()`),
+  and its result needs a previewer in `public/app.js`.
+- PDF page and slide thumbnails are drawn as the document looks (white
+  pages) in both looks; the Word and spreadsheet previews use the theme
+  tokens.
