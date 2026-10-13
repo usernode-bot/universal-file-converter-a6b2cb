@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Universal File Converter app icon: black document page with folded
+       corner, two cream arrows swapping in a circle, on brand cream.
+       Square corners: Homeroom rounds the tile itself. -->
+  <rect width="1024" height="1024" fill="#FFFEEA"/>
+  <path d="M328 200 H608 L736 328 V800 Q736 840 696 840 H328 Q288 840 288 800 V240 Q288 200 328 200 Z" fill="#000000"/>
+  <polyline points="608,200 608,328 736,328" fill="none" stroke="#FFFEEA" stroke-width="28" stroke-linejoin="round"/>
+  <path d="M390 516 A130 130 0 0 1 625 495" fill="none" stroke="#FFFEEA" stroke-width="52" stroke-linecap="round"/>
+  <polygon points="655,547 668,470 582,520" fill="#FFFEEA"/>
+  <path d="M634 604 A130 130 0 0 1 399 625" fill="none" stroke="#FFFEEA" stroke-width="52" stroke-linecap="round"/>
+  <polygon points="369,573 442,600 356,650" fill="#FFFEEA"/>
+</svg>
