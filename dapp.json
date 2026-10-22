@@ -13,7 +13,10 @@
       "expectSelector": "body[data-converter=\"ready\"] #dropzone #choose",
       "expectText": "Drop a file here",
       "visual": true,
-      "impact": ["public/**", "styles/**"]
+      "impact": [
+        "public/**",
+        "styles/**"
+      ]
     },
     {
       "id": "converter.ocr-entry",
@@ -21,6 +24,27 @@
       "path": "/",
       "expectSelector": "body[data-converter=\"ready\"] #sample-scan",
       "expectText": "TIFF"
+    },
+    {
+      "id": "nav.riwayat",
+      "name": "Riwayat page opens from the menu",
+      "path": "/#/riwayat",
+      "expectSelector": "#page-riwayat:not([hidden]) #history-empty",
+      "expectText": "Belum ada konversi"
+    },
+    {
+      "id": "nav.edit",
+      "name": "Edit File page opens from the menu",
+      "path": "/#/edit",
+      "expectSelector": "#page-edit:not([hidden]) [data-edit-target=\"docx\"]",
+      "expectText": "Pilih cara mengedit"
+    },
+    {
+      "id": "nav.profil",
+      "name": "Profil page marks its menu item",
+      "path": "/#/profil",
+      "expectSelector": "#page-profil:not([hidden])",
+      "expectText": "Profil"
     }
   ]
 }

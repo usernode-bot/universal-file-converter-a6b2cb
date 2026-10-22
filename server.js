@@ -150,6 +150,16 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Who is signed in, for the Profil page. Only what that page shows: the
+// handle and whether a wallet is linked, never the address itself.
+app.get('/api/me', (req, res) => {
+  if (!req.user) return res.json({ guest: !!req.guest, user: null });
+  res.json({
+    guest: false,
+    user: { username: req.user.username, walletLinked: !!req.user.usernode_pubkey },
+  });
+});
+
 // The template ships no favicon file; index.html carries an inline SVG
 // icon instead. Answer 204 here so anything that still probes
 // /favicon.ico (older browsers, direct visits) doesn't fall through to

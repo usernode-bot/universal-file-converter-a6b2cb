@@ -201,6 +201,33 @@
   .sheet-preview td.num { @apply text-right tabular-nums; }
   .sheet-preview .row-head { @apply bg-raised text-center text-muted; }
 
+  /* The main menu: a tab bar along the bottom on a phone, a bar across the
+     top from md up. The current page is marked with the accent. */
+  .main-nav {
+    @apply fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface md:sticky md:inset-x-auto md:top-0 md:border-b md:border-t-0;
+    padding-bottom: var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px));
+  }
+  .main-nav-list {
+    @apply mx-auto flex max-w-2xl;
+  }
+  .main-nav-list > li {
+    @apply flex-1;
+  }
+  .nav-item {
+    @apply flex min-h-14 flex-col items-center justify-center gap-0.5 px-2 text-small text-muted hover:text-fg
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus md:flex-row md:gap-2;
+  }
+  .nav-item svg {
+    @apply h-6 w-6;
+  }
+  .nav-item[aria-current="page"] {
+    @apply font-semibold text-accent;
+  }
+  .edit-row {
+    @apply flex min-h-11 w-full items-center gap-3 px-4 py-3 hover:bg-raised
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus;
+  }
+
   .progress-track {
     @apply h-2 w-full overflow-hidden rounded-full bg-line;
   }
