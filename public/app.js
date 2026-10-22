@@ -7,6 +7,8 @@ import {
   readWorkbook, sheetGrid, readPresentation, drawSlide,
 } from '/convert.js';
 
+import { addHistory, clearHistory, renderHistory, renderProfile } from '/pages.js';
+
 const $ = (id) => document.getElementById(id);
 
 const TARGET_NOTES = {
@@ -494,6 +496,13 @@ async function showResult(result) {
   $('result-note').textContent = note;
   $('result-note').hidden = !note;
   $('result').hidden = false;
+  addHistory({
+    name: result.name,
+    ext: fmt.ext.toUpperCase(),
+    from: FORMATS[state.kind].name,
+    size: formatBytes(result.blob.size),
+    at: Date.now(),
+  });
   const el = $('result-preview');
   skeleton(el);
   try {
@@ -630,12 +639,64 @@ async function sampleScan() {
 
 // ── Wiring ──────────────────────────────────────────────────────────────────
 
+// A format chosen on the Edit File page, used for the next file picked.
+let pendingTarget = null;
+
+const PAGES = ['berkas', 'riwayat', 'profil', 'edit'];
+const PAGE_TITLES = { berkas: 'Berkas', riwayat: 'Riwayat', profil: 'Profil', edit: 'Edit File' };
+
+function showPage() {
+  const m = location.hash.match(/^#\/(\w+)/);
+  const page = m && PAGES.includes(m[1]) ? m[1] : 'berkas';
+  for (const p of PAGES) $('page-' + p).hidden = p !== page;
+  document.querySelectorAll('[data-nav]').forEach((a) => {
+    if (a.dataset.nav === page) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  document.title = `${PAGE_TITLES[page]} · Universal File Converter`;
+  if (page === 'riwayat') renderHistory();
+  if (page === 'profil') renderProfile();
+  window.scrollTo(0, 0);
+}
+
+function wirePages() {
+  window.addEventListener('hashchange', showPage);
+  showPage();
+  $('profile-retry').addEventListener('click', renderProfile);
+  $('history-clear').addEventListener('click', async () => {
+    const un = window.unNative;
+    if (un && un.alert) {
+      const r = await un.alert({
+        title: 'Hapus riwayat?',
+        message: 'Daftar konversi di perangkat ini dihapus. Berkas yang sudah diunduh tidak terpengaruh.',
+        buttons: [{ label: 'Batal', style: 'cancel' }, { label: 'Hapus', style: 'destructive' }],
+      });
+      if (!r || r.button !== 'Hapus' && !(r.button && r.button.label === 'Hapus')) return;
+    }
+    clearHistory();
+    renderHistory();
+    if (un && un.toast) un.toast('Riwayat dihapus');
+  });
+  document.querySelectorAll('[data-edit-target]').forEach((b) => {
+    b.addEventListener('click', () => {
+      pendingTarget = b.dataset.editTarget;
+      location.hash = '#/berkas';
+      showPage();
+      $('file-input').click();
+    });
+  });
+}
+
 function wire() {
   const input = $('file-input');
   const zone = $('dropzone');
   $('choose').addEventListener('click', () => input.click());
   zone.addEventListener('click', (e) => { if (e.target === zone) input.click(); });
-  input.addEventListener('change', () => { if (input.files[0]) loadFile(input.files[0]); });
+  input.addEventListener('change', () => {
+    const target = pendingTarget;
+    pendingTarget = null;
+    if (input.files[0]) loadFile(input.files[0], target);
+  });
 
   let depth = 0;
   zone.addEventListener('dragenter', (e) => { e.preventDefault(); depth++; zone.dataset.dragging = ''; });
@@ -690,6 +751,7 @@ function wire() {
 }
 
 wire();
+wirePages();
 setUpLanguages();
 // PDF previews need pdf.js straight away, so start loading it now. The other
 // libraries load the first time a conversion or preview needs them.

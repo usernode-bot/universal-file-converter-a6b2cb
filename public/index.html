@@ -109,7 +109,24 @@
   </script>
   <script src="/usernode-native/v1/native.js"></script>
 </head>
-<body class="min-h-screen bg-ground text-fg">
+<body class="min-h-screen bg-ground pb-20 text-fg md:pb-0">
+  <nav class="main-nav" aria-label="Menu utama">
+    <ul class="main-nav-list">
+      <li><a class="nav-item un-pressable" href="#/berkas" data-nav="berkas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        <span>Berkas</span></a></li>
+      <li><a class="nav-item un-pressable" href="#/riwayat" data-nav="riwayat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span>Riwayat</span></a></li>
+      <li><a class="nav-item un-pressable" href="#/profil" data-nav="profil">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        <span>Profil</span></a></li>
+      <li><a class="nav-item un-pressable" href="#/edit" data-nav="edit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        <span>Edit File</span></a></li>
+    </ul>
+  </nav>
+  <div id="page-berkas" data-page="berkas">
   <main class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8">
     <header class="flex flex-col gap-1">
       <h1 class="text-title">File converter</h1>
@@ -213,6 +230,60 @@
         <button id="again" type="button" class="btn-secondary w-full">Convert another file</button>
       </section>
     </section>
+  </main>
+  </div>
+
+  <main id="page-riwayat" data-page="riwayat" class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8" hidden>
+    <header class="flex flex-col gap-1">
+      <h1 class="text-title">Riwayat</h1>
+      <p class="text-body text-muted">Konversi yang sudah kamu lakukan di perangkat ini. Hanya nama dan format yang disimpan, bukan isi berkasnya.</p>
+    </header>
+    <ul id="history-list" class="list" hidden></ul>
+    <div id="history-empty" class="state-empty rounded-xl border border-line bg-surface">
+      <p class="text-heading">Belum ada konversi</p>
+      <p class="text-body text-muted">Setelah kamu mengonversi berkas, hasilnya tercatat di sini.</p>
+      <a href="#/berkas" class="btn-primary">Pilih berkas</a>
+    </div>
+    <button id="history-clear" type="button" class="btn-secondary self-start" hidden>Hapus riwayat</button>
+  </main>
+
+  <main id="page-profil" data-page="profil" class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8" hidden>
+    <header class="flex flex-col gap-1">
+      <h1 class="text-title">Profil</h1>
+      <p class="text-body text-muted">Akun Homeroom yang sedang dipakai.</p>
+    </header>
+    <div id="profile-loading" class="flex flex-col gap-3" aria-hidden="true">
+      <div class="skeleton h-14"></div>
+      <div class="skeleton h-14"></div>
+    </div>
+    <div id="profile-error" class="state-error rounded-xl border border-danger bg-surface" role="alert" hidden>
+      <p class="text-heading">Profil tidak bisa dimuat</p>
+      <p class="text-body text-muted">Konversi berkas tetap bisa dipakai. Coba muat profil lagi.</p>
+      <button id="profile-retry" type="button" class="btn-secondary">Coba lagi</button>
+    </div>
+    <ul id="profile-list" class="list" hidden></ul>
+    <p id="profile-guest" class="text-body text-muted" hidden>Kamu melihat aplikasi ini sebagai tamu. Buat akun untuk melihat profilmu di sini.</p>
+  </main>
+
+  <main id="page-edit" data-page="edit" class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8" hidden>
+    <header class="flex flex-col gap-1">
+      <h1 class="text-title">Edit File</h1>
+      <p class="text-body text-muted">Ubah PDF, foto, atau hasil pindaian menjadi berkas yang bisa kamu edit. Semuanya diproses di perangkatmu dan tidak diunggah.</p>
+    </header>
+    <div>
+      <h2 class="section-label">Pilih cara mengedit</h2>
+      <ul class="list">
+        <li><button type="button" class="edit-row un-pressable" data-edit-target="docx">
+          <span class="doc-tile">DOCX</span>
+          <span class="min-w-0 flex-1 text-left"><span class="block text-body font-medium">Edit teks di Word</span><span class="block text-small text-muted">Dari PDF, foto, atau pindaian (dibaca dengan OCR)</span></span>
+        </button></li>
+        <li><button type="button" class="edit-row un-pressable" data-edit-target="xlsx">
+          <span class="doc-tile">XLSX</span>
+          <span class="min-w-0 flex-1 text-left"><span class="block text-body font-medium">Edit tabel di Excel</span><span class="block text-small text-muted">Teks dirapikan menjadi baris dan kolom</span></span>
+        </button></li>
+      </ul>
+      <p class="mt-2 px-1 text-small text-muted">Setelah memilih berkas, kamu bisa melihat pratinjau dan mengunduh hasilnya untuk diedit di aplikasi pilihanmu.</p>
+    </div>
   </main>
   <script type="module" src="/app.js"></script>
 </body>
